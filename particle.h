@@ -8,7 +8,6 @@
 #include <vector>
 #include <tuple>
 #include <algorithm>
-#include <stdexcept>
 
 class Particle {
 public:
@@ -24,10 +23,9 @@ public:
     float time_lived = 0.f;
     float time_to_live = 1.f;
 
-    float mass = 1.f;
-    float sigma = 1.f; // surface density
+    int mass = 1;
+    float sigma = 1.f;
 
-    float collision_probability = 0.f;
     float attraction_strength = 0.f;
     float absorption_probability = 0.1f;
     float decay_probability = 0.f;
@@ -73,20 +71,14 @@ public:
         return *this;
     }
 
-    Particle& set_mass(float v) noexcept {
-        if (v > 0.f) mass = v;
+    Particle& set_mass(int v) noexcept {
+        if (v > 0) mass = v;
         return *this;
     }
+
 
     Particle& set_sigma(float v) noexcept {
         if (v > 0.f) sigma = v;
-        return *this;
-    }
-
-    Particle& set_collision_probability(float v) noexcept {
-        if (v < 0.f) v = 0.f;
-        if (v > 1.f) v = 1.f;
-        collision_probability = v;
         return *this;
     }
 
@@ -119,11 +111,15 @@ public:
     // ============================================================
 
     float radius() const noexcept {
-        return std::sqrt(mass / (static_cast<float>(M_PI) * sigma));
+        return std::sqrt(
+            static_cast<float>(mass) /
+            (static_cast<float>(M_PI) * sigma)
+        );
     }
 
     float energy() const noexcept {
-        return ENERGY_MULTIPLIER * std::pow(mass, ENERGY_POWER);
+        return ENERGY_MULTIPLIER *
+               std::pow(static_cast<float>(mass), ENERGY_POWER);
     }
 
     float stiffness() const noexcept {
@@ -138,7 +134,7 @@ public:
         time_lived += dt;
     }
 
-    bool is_decayed() const noexcept {
+    bool is_dead() const noexcept {
         return time_lived >= time_to_live;
     }
 
@@ -154,7 +150,7 @@ public:
     void integrate(float dt) noexcept {
         velocity = velocity.add(acceleration.scale(dt));
         position = position.add(velocity.scale(dt));
-        acceleration = V2D(); // reset forces
+        acceleration = V2D();
     }
 
     // ============================================================
@@ -166,7 +162,6 @@ public:
         return d <= (radius() + other.radius());
     }
 
-    // Mass-dependent attraction (Newton-style)
     void attract_to(const Particle& other) noexcept {
         V2D dir = other.position.subtract(position);
         float dist = dir.magnitude();
@@ -177,7 +172,7 @@ public:
         constexpr float SOFTENING = 0.01f;
 
         float accel_mag =
-            attraction_strength * other.mass /
+            attraction_strength * static_cast<float>(other.mass) /
             (dist * dist + SOFTENING);
 
         acceleration = acceleration.add(
@@ -185,12 +180,11 @@ public:
         );
     }
 
-    // Mass-dependent elastic collision
     void bounce(Particle& other, float restitution = 1.f) noexcept {
         if (!is_collided(other))
             return;
 
-        if (mass <= 0.f || other.mass <= 0.f)
+        if (mass <= 0 || other.mass <= 0)
             return;
 
         V2D normal = position.subtract(other.position).unit();
@@ -200,8 +194,8 @@ public:
         if (vel_n > 0.f)
             return;
 
-        float inv_m1 = 1.f / mass;
-        float inv_m2 = 1.f / other.mass;
+        float inv_m1 = 1.f / static_cast<float>(mass);
+        float inv_m2 = 1.f / static_cast<float>(other.mass);
 
         float j =
             -(1.f + restitution) * vel_n /
@@ -217,75 +211,82 @@ public:
     // Fission (mass-based)
     // ============================================================
 
-    using FissionSplit = std::tuple<int,int,int,float>; // (A1, A2, neutrons, probability)
+    using FissionSplit = std::tuple<int,int,int,float>;
 
-    std::vector<FissionSplit> fission_splits(std::optional<float> energy_input = std::nullopt) const {
-        int A = static_cast<int>(mass); // particle mass as A
-        if (A < 2)
-            throw std::invalid_argument("Fission unlikely for A < 2 in this toy model");
+    std::vector<FissionSplit> bohr_wheeler(std::optional<float> energy_input = std::nullopt) const
+    {
+        if (mass < 3) {
+            return {
+                FissionSplit{ mass, 0, 0, 1.0f }
+            };
+        }
 
-        // --- asymmetry range ---
-        float deltaA0 = 0.18f * std::pow(A, 2.f / 3.f);
+        float deltaA0 = 0.18f * std::pow(mass, 2.f / 3.f);
         if (energy_input.has_value()) {
-            float symmetry_factor = std::max(0.6f, 1.f - energy_input.value() / 100.f);
+            float symmetry_factor =
+                std::max(0.6f, 1.f - energy_input.value() / 100.f);
             deltaA0 *= symmetry_factor;
         }
 
-        // --- average neutrons emitted ---
         float base_nu = 2.5f;
         if (energy_input.has_value())
             base_nu += 0.02f * energy_input.value();
 
-        // --- generate all reasonable splits ---
-        float max_delta = deltaA0 * 2.f;          // ±deltaA0 range
-        float step = std::max(1.f, deltaA0 / 3.f); // finer steps for small masses
+        float max_delta = deltaA0 * 2.f;
+        float step = std::max(1.f, deltaA0 / 3.f);
 
         std::vector<FissionSplit> results;
         std::vector<float> weights;
 
         for (float deltaA = -max_delta; deltaA <= max_delta; deltaA += step) {
-            int nu = static_cast<int>(std::round(base_nu + std::abs(deltaA) * 0.1f));
+            int nu = static_cast<int>(
+                std::round(base_nu + std::abs(deltaA) * 0.1f)
+            );
 
-            int A1 = static_cast<int>(std::round((A - nu) / 2.f + deltaA));
-            int A2 = (A - nu) - A1;
+            int A1 = static_cast<int>(
+                std::round((mass - nu) / 2.f + deltaA)
+            );
+            int A2 = (mass - nu) - A1;
 
             if (A1 <= 0 || A2 <= 0)
                 continue;
 
-            float sigma_gauss = deltaA0; // scale weight by asymmetry
-            float weight = std::exp(- (deltaA * deltaA) / (2.f * sigma_gauss * sigma_gauss));
+            float weight =
+                std::exp(-(deltaA * deltaA) /
+                         (2.f * deltaA0 * deltaA0));
 
             results.emplace_back(A1, A2, nu, weight);
             weights.push_back(weight);
         }
 
-        // --- normalize probabilities ---
         float total_weight = 0.f;
-        for (auto w : weights) total_weight += w;
+        for (float w : weights) total_weight += w;
 
         std::vector<FissionSplit> normalized;
-        for (size_t j = 0; j < results.size(); ++j) {
-            auto [A1, A2, nu, _] = results[j];
-            normalized.emplace_back(A1, A2, nu, weights[j] / total_weight);
+        for (size_t i = 0; i < results.size(); ++i) {
+            auto [A1, A2, nu, _] = results[i];
+            normalized.emplace_back(
+                A1, A2, nu, weights[i] / total_weight
+            );
         }
 
         return normalized;
     }
 
-    FissionSplit fission_random(std::optional<float> energy_input = std::nullopt) const {
-        auto splits = fission_splits(energy_input);  // <- remove n_splits argument
-        if(splits.empty()) throw std::runtime_error("No fission splits available");
+    FissionSplit split(std::optional<float> energy_input = std::nullopt) const {
+        auto splits = bohr_wheeler(energy_input);
 
         static std::random_device rd;
         static std::mt19937 gen(rd());
         std::uniform_real_distribution<float> dist(0.f, 1.f);
-        float r = dist(gen);
 
+        float r = dist(gen);
         float cum_prob = 0.f;
-        for(const auto& split : splits) {
-            float prob = std::get<3>(split);
-            cum_prob += prob;
-            if(r <= cum_prob) return split;
+
+        for (const auto& s : splits) {
+            cum_prob += std::get<3>(s);
+            if (r <= cum_prob)
+                return s;
         }
 
         return splits.back();

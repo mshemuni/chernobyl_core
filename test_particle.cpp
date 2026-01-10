@@ -1,138 +1,192 @@
+//
+// Created by niaei on 10.01.2026
+//
+
+#include "particle.h"
 #include <cassert>
 #include <cmath>
 #include <iostream>
 
-#include "v2d.h"
+constexpr float EPS = 1e-5f;
 
-static constexpr float EPS = 1e-6f;
-
-static bool feq(float a, float b, float eps = EPS) {
+bool feq(float a, float b, float eps = EPS) {
     return std::fabs(a - b) < eps;
 }
 
 int main() {
 
-    // --- construction ---
-    {
-        V2D v;
-        assert(feq(v.x, 0.f));
-        assert(feq(v.y, 0.f));
+    // ============================================================
+    // Construction & setters
+    // ============================================================
 
-        V2D u(3.f, 4.f);
-        assert(feq(u.x, 3.f));
-        assert(feq(u.y, 4.f));
+    {
+        Particle p(V2D(1.f, 2.f));
+        assert(p.mass == 1);
+
+        p.set_mass(10);
+        assert(p.mass == 10);
+
+        p.set_mass(-5);   // invalid
+        assert(p.mass == 10);  // unchanged
     }
 
-    // --- add / subtract ---
+    // ============================================================
+    // Derived quantities
+    // ============================================================
+
     {
-        V2D a(5.f, 4.f);
-        V2D b(2.f, 1.f);
+        Particle p(V2D(0.f, 0.f));
+        p.set_mass(9);
+        p.set_sigma(1.f);
 
-        V2D c = a.add(b);
-        assert(feq(c.x, 7.f));
-        assert(feq(c.y, 5.f));
+        float expected_radius = std::sqrt(9.f / static_cast<float>(M_PI));
+        assert(feq(p.radius(), expected_radius));
 
-        V2D d = a.subtract(b);
-        assert(feq(d.x, 3.f));
-        assert(feq(d.y, 3.f));
+        float expected_energy =
+            Particle::ENERGY_MULTIPLIER *
+            std::pow(9.f, Particle::ENERGY_POWER);
+
+        assert(feq(p.energy(), expected_energy));
+        assert(feq(p.stiffness(), 1.f / expected_energy));
     }
 
-    // --- scale / multiply ---
-    {
-        V2D v(2.f, -3.f);
-        V2D r1 = v.scale(2.f);
-        V2D r2 = v.multiply(2.f);
+    // ============================================================
+    // Lifecycle
+    // ============================================================
 
-        assert(feq(r1.x, 4.f));
-        assert(feq(r1.y, -6.f));
-        assert(feq(r2.x, 4.f));
-        assert(feq(r2.y, -6.f));
+    {
+        Particle p(V2D(0.f, 0.f));
+        p.set_time_to_live(2.f);
+
+        p.age(1.f);
+        assert(!p.is_dead());
+
+        p.age(1.f);
+        assert(p.is_dead());
     }
 
-    // --- dot product ---
-    {
-        V2D a(1.f, 0.f);
-        V2D b(0.f, 1.f);
-        assert(feq(a.dot(b), 0.f));
+    // ============================================================
+    // Integration
+    // ============================================================
 
-        V2D c(1.f, 2.f);
-        V2D d(3.f, 4.f);
-        assert(feq(c.dot(d), 11.f)); // 1*3 + 2*4
+    {
+        Particle p(V2D(0.f, 0.f), V2D(1.f, 0.f));
+        p.set_acceleration(V2D(1.f, 0.f));
+
+        p.integrate(1.f);
+
+        assert(feq(p.velocity.x, 2.f));
+        assert(feq(p.position.x, 2.f));
+        assert(feq(p.acceleration.magnitude(), 0.f));
     }
 
-    // --- magnitude / distance ---
-    {
-        V2D v(3.f, 4.f);
-        assert(feq(v.magnitude(), 5.f));
+    // ============================================================
+    // Collision detection
+    // ============================================================
 
-        V2D a(1.f, 1.f);
-        V2D b(4.f, 5.f);
-        assert(feq(a.distance(b), 5.f)); // sqrt(3^2 + 4^2)
+    {
+        Particle a(V2D(0.f, 0.f));
+        Particle b(V2D(0.1f, 0.f));
+
+        a.set_mass(1);
+        b.set_mass(1);
+
+        assert(a.is_collided(b));
     }
 
-    // --- unit vector ---
+    // ============================================================
+    // Attraction
+    // ============================================================
+
     {
-        V2D v(3.f, 4.f);
-        V2D u = v.unit();
-        assert(feq(u.magnitude(), 1.f));
+        Particle a(V2D(0.f, 0.f));
+        Particle b(V2D(1.f, 0.f));
+
+        a.set_attraction_strength(1.f);
+        b.set_mass(10);
+
+        a.attract_to(b);
+
+        assert(a.acceleration.x > 0.f);
+        assert(feq(a.acceleration.y, 0.f));
     }
 
-    // --- angle between (in degrees, convert if needed) ---
+    // ============================================================
+    // Elastic bounce (1D sanity)
+    // ============================================================
+
     {
-        V2D a(1.f, 0.f);
-        V2D b(0.f, 1.f);
-        float angle = a.angle_between(b); // ensure this returns degrees
-        assert(feq(angle, 90.f));
+        Particle a(V2D(0.f, 0.f), V2D(1.f, 0.f));
+        Particle b(V2D(0.5f, 0.f), V2D(-1.f, 0.f));
+
+        a.set_mass(1);
+        b.set_mass(1);
+
+        a.bounce(b, 1.f);
+
+        // velocities should swap (equal masses, elastic)
+        assert(a.velocity.x < 0.f);
+        assert(b.velocity.x > 0.f);
     }
 
-    // --- parallel / perpendicular ---
+    // ============================================================
+    // Fission: Bohr–Wheeler
+    // ============================================================
+
     {
-        V2D a(2.f, 2.f);
-        V2D b(4.f, 4.f);
-        assert(a.is_parallel(b));
+        Particle p(V2D(0.f, 0.f));
+        p.set_mass(236);
 
-        V2D c(1.f, 0.f);
-        V2D d(0.f, 1.f);
-        assert(c.is_perpendicular(d));
-        assert(c.is_non_parallel(d) == false);
-    }
+        auto splits = p.bohr_wheeler();
+        assert(!splits.empty());
 
-    // --- rotate about origin (degrees) ---
-    {
-        V2D v(1.f, 0.f);
-        V2D r = v.rotate(90.f); // assuming rotate() uses degrees
-        assert(feq(r.x, 0.f));
-        assert(feq(r.y, 1.f));
-    }
-
-    // --- rotate about arbitrary point ---
-    {
-        V2D p(3.f, 2.f);
-        V2D center(1.f, 1.f);
-        V2D r = p.rotate(90.f, center); // assuming degrees
-        assert(feq(r.x, 0.f));
-        assert(feq(r.y, 3.f));
-    }
-
-    // --- random unit vector ---
-    {
-        V2D v1 = V2D::random();
-        V2D v2 = V2D::random();
-
-        // magnitude should be 1
-        assert(feq(v1.magnitude(), 1.f));
-        assert(feq(v2.magnitude(), 1.f));
-
-        // not zero vector
-        assert(!(feq(v1.x, 0.f) && feq(v1.y, 0.f)));
-        assert(!(feq(v2.x, 0.f) && feq(v2.y, 0.f)));
-
-        // extremely unlikely to be identical
-        if (v1.is_same(v2)) {
-            std::cout << "Warning: random vectors identical (very rare)\n";
+        float prob_sum = 0.f;
+        for (auto& [A1, A2, nu, prob] : splits) {
+            assert(A1 > 0);
+            assert(A2 > 0);
+            assert(nu >= 0);
+            assert(feq(A1 + A2 + nu, 236.f));
+            prob_sum += prob;
         }
+
+        assert(feq(prob_sum, 1.f, 1e-3f));
     }
 
-    std::cout << "All V2D tests passed\n";
+    // ============================================================
+    // Fission: stochastic split
+    // ============================================================
+
+    {
+        Particle p(V2D(0.f, 0.f));
+        p.set_mass(235);
+
+        auto [A1, A2, nu, prob] = p.split();
+
+        assert(A1 > 0);
+        assert(A2 > 0);
+        assert(nu >= 0);
+        assert(feq(static_cast<float>(A1 + A2 + nu), 235.f));
+        assert(prob > 0.f && prob <= 1.f);
+    }
+
+    // ============================================================
+    // Fission invalid mass
+    // ============================================================
+
+    {
+        Particle p(V2D(0.f, 0.f));
+        p.set_mass(1);
+
+        bool thrown = false;
+        try {
+            p.bohr_wheeler();
+        } catch (const std::invalid_argument&) {
+            thrown = true;
+        }
+
+        assert(thrown);
+    }
+
+    std::cout << "All Particle tests passed \n";
     return 0;
 }
